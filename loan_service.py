@@ -2,8 +2,71 @@
 Eligibility estimation and prepayment simulation services.
 """
 
-from app.services.emi_service import calculate_emi, _format_inr
-from data.banks import BANKS
+from emi_calculator import calculate_emi, _format_inr
+import json
+from sqlalchemy import create_engine, text
+
+
+DATABASE_URL = "sqlite:///./bank_data.db"
+
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False},
+)
+
+
+def get_banks_from_db() -> list[dict]:
+    query = text("""
+        SELECT
+            bank_id,
+            name,
+            short_name,
+            bank_type,
+            rate_min,
+            rate_max,
+            rate_type,
+            benchmark,
+            min_loan_amount,
+            max_loan_amount,
+            min_tenure_years,
+            max_tenure_years,
+            processing_fee_pct,
+            processing_fee_min,
+            processing_fee_max,
+            processing_fee_note,
+            prepayment_floating,
+            prepayment_fixed,
+            foreclosure_floating,
+            foreclosure_fixed,
+            min_cibil,
+            max_ltv,
+            min_age,
+            max_age,
+            womens_concession,
+            special_features,
+            cibil_slabs
+        FROM banks
+    """)
+
+    with engine.connect() as connection:
+        result = connection.execute(query)
+        banks = []
+
+        for row in result:
+            bank = dict(row._mapping)
+
+            bank["id"] = bank.pop("bank_id")
+            bank["type"] = bank.pop("bank_type")
+
+            if isinstance(bank["special_features"], str):
+                bank["special_features"] = json.loads(bank["special_features"])
+
+            if isinstance(bank["cibil_slabs"], str):
+                bank["cibil_slabs"] = json.loads(bank["cibil_slabs"])
+
+            banks.append(bank)
+
+        return banks
 
 
 # ──────────────────────────────────────────────
@@ -66,7 +129,9 @@ def estimate_eligibility(
 
     # Find eligible banks
     eligible_banks = []
-    for bank in BANKS:
+    banks = get_banks_from_db()
+
+    for bank in banks:
         if bank["min_cibil"] <= cibil_score and age <= bank["max_age"]:
             eligible_banks.append({
                 "bank": bank["short_name"],
@@ -258,3 +323,4 @@ def _prepayment_voice_summary(
             f"to {_format_inr(new_emi)}. "
             f"You save {saved_str} in total interest."
         )
+

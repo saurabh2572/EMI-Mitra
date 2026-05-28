@@ -1,14 +1,51 @@
 """
 Bank service — fetch, filter, and compare bank rates.
-Uses the static bank data seeded from real 2026 rates.
+Uses bank data from bank_data.db.
 """
 
-from data.banks import BANKS
-from app.services.emi_service import calculate_emi, _format_inr
+import json
+
+from sqlalchemy import create_engine, text
+
+from emi_calculator import calculate_emi, _format_inr
+
+
+DATABASE_URL = "sqlite:///./bank_data.db"
+
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False},
+)
+
+
+def get_banks_from_db() -> list[dict]:
+    query = text("SELECT * FROM banks")
+
+    with engine.connect() as connection:
+        result = connection.execute(query)
+        banks = []
+
+        for row in result:
+            bank = dict(row._mapping)
+
+            bank["id"] = bank.pop("bank_id", None)
+            bank["type"] = bank.pop("bank_type", None)
+
+            if isinstance(bank.get("special_features"), str):
+                bank["special_features"] = json.loads(bank["special_features"])
+
+            if isinstance(bank.get("cibil_slabs"), str):
+                bank["cibil_slabs"] = json.loads(bank["cibil_slabs"])
+
+            banks.append(bank)
+
+        return banks
 
 
 def get_all_banks() -> list:
     """Return all banks with key info for listing."""
+    banks = get_banks_from_db()
+
     return [
         {
             "id": b["id"],
@@ -19,25 +56,28 @@ def get_all_banks() -> list:
             "rate_max": b["rate_max"],
             "processing_fee_note": b["processing_fee_note"],
         }
-        for b in BANKS
+        for b in banks
     ]
 
 
 def get_bank_detail(bank_id: str) -> dict | None:
     """Return full detail for a single bank."""
-    bank = next((b for b in BANKS if b["id"] == bank_id), None)
-    return bank
+    banks = get_banks_from_db()
+    return next((b for b in banks if b["id"] == bank_id), None)
 
 
 def get_rate_for_cibil(bank: dict, cibil_score: int, is_woman: bool = False) -> float:
     """Determine applicable rate based on CIBIL score slab."""
-    rate = bank["rate_max"]  # default to max if no slab matches
+    rate = bank["rate_max"]
+
     for slab in bank.get("cibil_slabs", []):
         if slab["min"] <= cibil_score <= slab["max"]:
             rate = slab["rate"]
             break
+
     if is_woman:
         rate -= bank.get("womens_concession", 0)
+
     return round(rate, 2)
 
 
@@ -53,19 +93,25 @@ def compare_banks(
 
     Returns ranked list with EMI, total interest, and processing fee.
     """
-    banks_to_compare = BANKS
-    if bank_ids:
-        banks_to_compare = [b for b in BANKS if b["id"] in bank_ids]
+    banks_to_compare = get_banks_from_db()
 
-    # Filter banks that accept this CIBIL score
-    eligible_banks = [b for b in banks_to_compare if b["min_cibil"] <= cibil_score]
+    if bank_ids:
+        banks_to_compare = [
+            b for b in banks_to_compare
+            if b["id"] in bank_ids
+        ]
+
+    eligible_banks = [
+        b for b in banks_to_compare
+        if b["min_cibil"] <= cibil_score
+    ]
 
     results = []
+
     for bank in eligible_banks:
         rate = get_rate_for_cibil(bank, cibil_score, is_woman)
         emi_data = calculate_emi(loan_amount, rate, tenure_years)
 
-        # Processing fee estimate
         fee = loan_amount * bank["processing_fee_pct"] / 100
         fee = max(fee, bank["processing_fee_min"])
         fee = min(fee, bank["processing_fee_max"])
@@ -82,13 +128,13 @@ def compare_banks(
             "total_cost": round(emi_data["total_payment"] + fee, 2),
             "prepayment_penalty_floating": bank["prepayment_floating"],
             "min_cibil_required": bank["min_cibil"],
-            "special_features": bank["special_features"][:2],  # top 2 for voice
+            "special_features": bank.get("special_features", [])[:2],
         })
 
-    # Rank by total cost
     results.sort(key=lambda x: x["total_cost"])
-    for i, r in enumerate(results):
-        r["rank"] = i + 1
+
+    for index, result in enumerate(results):
+        result["rank"] = index + 1
 
     best = results[0] if results else None
 
@@ -117,9 +163,11 @@ def _comparison_voice_summary(results: list, loan_amount: float, tenure: int) ->
         f"The best option is {best['bank_name']} at {best['applicable_rate']}% per annum, "
         f"with an EMI of {_format_inr(best['monthly_emi'])} per month.",
     ]
+
     if len(results) > 1:
         lines.append(
             f"Compared to {worst['bank_name']}, you save {_format_inr(savings)} in interest "
             f"by choosing {best['bank_name']}."
         )
+
     return " ".join(lines)
