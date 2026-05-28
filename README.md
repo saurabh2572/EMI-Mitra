@@ -1,5 +1,10 @@
 # EMI Mitra Backend
 
+## Architecture
+
+<img width="4884" height="1450" alt="emi_mitra_architecture drawio" src="https://github.com/user-attachments/assets/1973fc67-8f1b-4a4d-9a02-5bd8060a7132" />
+
+
 FastAPI backend for EMI Mitra, a home loan assistant that can be connected to VAPI as tool endpoints. The backend supports EMI calculation, eligibility estimation, bank comparison, prepayment simulation, and home loan concept explanations.
 
 ## Features
