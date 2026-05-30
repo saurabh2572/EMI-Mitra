@@ -64,18 +64,6 @@ Run the API server:
 uvicorn main:app --reload
 ```
 
-Default local server:
-
-```text
-http://localhost:8000
-```
-
-Swagger docs:
-
-```text
-http://localhost:8000/docs
-```
-
 ## API Endpoints
 
 ### Root
